@@ -31,50 +31,16 @@ jobs:
         with:
           path: tmp_patches
 
-      # 3️⃣ 应用补丁 (通过重写函数确保 100% 成功)
+      # 3️⃣ 应用补丁 (使用 -p1 模式)
       - name: Apply Headscale Patches
         run: |
-          echo "=== 开始物理注入 Headscale 补丁 ==="
-
-          # 1. 注入 connection/http2.go (放行 101)
-          # 我们直接清空这个函数里的状态码强制转换逻辑
-          python3 -c '
-          import os
-          path = "connection/http2.go"
-          content = open(path).read()
-          # 移除 101 -> 200 的转换
-          content = content.replace("if status == http.StatusSwitchingProtocols {\n\t\tstatus = http.StatusOK\n\t}", "// Status 101 Preserved")
-          # 修复 stripWebsocketUpgradeHeader
-          import re
-          content = re.sub(r"func stripWebsocketUpgradeHeader\(r \*http\.Request\) \{.*?\}", "func stripWebsocketUpgradeHeader(r *http.Request) {\n\treturn\n}", content, flags=re.DOTALL)
-          with open(path, "w") as f: f.write(content)
-          '
-
-          # 2. 注入 proxy/proxy.go (恢复 Body 和 清理 Header)
-          # 使用 Python 处理多行替换，避免 sed 的语法陷阱
-          python3 -c '
-          import os
-          path = "proxy/proxy.go"
-          content = open(path).read()
-          # 恢复 ContentLength 和 Body
-          content = content.replace("roundTripReq.ContentLength = 0", "roundTripReq.ContentLength = tr.Request.ContentLength")
-          content = content.replace("roundTripReq.Body = nil", "roundTripReq.Body = tr.Request.Body")
-          # 注入关键 Header 处理
-          old_line = "resp, err := httpService.RoundTrip(roundTripReq)"
-          new_logic = """if isWebsocket {
-          \t\troundTripReq.Header.Del("Cf-Cloudflared-Proxy-Connection-Upgrade")
-          \t\troundTripReq.Header.Set("Connection", "Upgrade")
-          \t\troundTripReq.Header.Set("Upgrade", "websocket")
-          \t}
-          \tresp, err := httpService.RoundTrip(roundTripReq)"""
-          content = content.replace(old_line, new_logic)
-          with open(path, "w") as f: f.write(content)
-          '
-
-          # 3. 注入 carrier/websocket.go (放行响应头)
-          sed -i '/stripWebsocketHeaders/,/}/d' carrier/websocket.go
-
-          echo "=== 注入完成，开始编译 ==="
+          # 确保在 cloudflared 源码根目录下运行
+          # -p1 剥离 a/ 和 b/
+          patch -p1 < tmp_patches/patches/allow-upgrade-with-body.patch
+          
+          # 清理临时目录
+          rm -rf tmp_patches
+          echo "Patches applied successfully using patch -p1."
 
       # 4️⃣ 安装环境依赖 (对齐 Makefile 需求)
       - name: Install System Dependencies
