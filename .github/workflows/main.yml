@@ -1,0 +1,94 @@
+name: Build Cloudflared (Official Makefile Style)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布版本号'
+        required: true
+        default: '2026.2.0'
+      arch:
+        description: '目标架构'
+        required: true
+        default: 'arm64'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout cloudflared
+        uses: actions/checkout@v4
+        with:
+          repository: cloudflare/cloudflared
+          # 确保拉取所有 tag 供 Makefile 的 git describe 使用
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.version }}
+
+      # 1️⃣ 安装 Requirements (完全对齐 Makefile 依赖)
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            make capnproto libcapnp-dev \
+            ruby ruby-dev rubygems build-essential rpm
+          sudo gem install --no-document fpm
+
+      # 2️⃣ 安装 Custom Go 1.24
+      - name: Install Custom Go
+        run: |
+          curl -L -o go.tar.gz https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+          mkdir -p $HOME/custom_go
+          tar -xzf go.tar.gz -C $HOME/custom_go --strip-components=1
+          echo "GOROOT=$HOME/custom_go" >> $GITHUB_ENV
+          echo "PATH=$HOME/custom_go/bin:$HOME/go/bin:$PATH" >> $GITHUB_ENV
+
+      # 3️⃣ 安装 Go 插件 (Makefile 中的 capnp 目标需要)
+      - name: Install Go Tools
+        run: |
+          go install capnproto.org/go/capnp/v3/capnpc-go@latest
+          go install golang.org/x/tools/cmd/goimports@latest
+
+      # 4️⃣ 编译与打包 (直接调用 Makefile 目标)
+      - name: Build and Package
+        run: |
+          # 设定交叉编译变量
+          export GOOS=linux
+          export GOARCH=${{ github.event.inputs.arch }}
+          export CGO_ENABLED=0
+          
+          # 手动创建一个符合 Makefile 要求的 VERSION 文件或环境变量
+          # 因为 Makefile 里用 git describe，如果 ref 是 tag 则会自动匹配
+          
+          echo "Step 1: Building Binary..."
+          make cloudflared
+          
+          echo "Step 2: Building DEB Package..."
+          # cloudflared-deb 依赖二进制文件和 man 模板
+          # Makefile 会自动调用 fpm
+          make cloudflared-deb
+          
+          # 整理产物
+          mkdir -p artifacts
+          cp cloudflared artifacts/
+          mv *.deb artifacts/
+
+      # 5️⃣ 运行你的 Python 发布脚本
+      - name: Run Release Script
+        env:
+          # 从 Secrets 获取
+          API_KEY: ${{ secrets.GITHUB_TOKEN }}
+          KV_API_TOKEN: ${{ secrets.CF_KV_API_TOKEN }}
+          KV_ACCOUNT: ${{ secrets.CF_ACCOUNT_ID }}
+          KV_NAMESPACE: ${{ secrets.CF_KV_NAMESPACE }}
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          pip install PyGithub requests
+          # 注意：Makefile 生成的 artifacts 目录路径需与脚本 --path 一致
+          python3 release_script.py \
+            --api-key "$API_KEY" \
+            --release-version "$VERSION" \
+            --path "./artifacts" \
+            --kv-api-token "$KV_API_TOKEN" \
+            --kv-account-id "$KV_ACCOUNT" \
+            --namespace-id "$KV_NAMESPACE"
