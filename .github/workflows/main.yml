@@ -1,4 +1,4 @@
-name: Build Cloudflared (Official Makefile Style)
+name: Build Cloudflared (Official Naming & Legacy Go)
 
 on:
   workflow_dispatch:
@@ -17,78 +17,83 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      # 1️⃣ 检出官方源码
       - name: Checkout cloudflared
         uses: actions/checkout@v4
         with:
           repository: cloudflare/cloudflared
-          # 确保拉取所有 tag 供 Makefile 的 git describe 使用
-          fetch-depth: 0
           ref: ${{ github.event.inputs.version }}
+          fetch-depth: 0
 
-      # 1️⃣ 安装 Requirements (完全对齐 Makefile 依赖)
+      # 2️⃣ 安装环境依赖 (对齐 Makefile 需求)
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            make capnproto libcapnp-dev \
-            ruby ruby-dev rubygems build-essential rpm
+          sudo apt-get install -y make capnproto libcapnp-dev ruby ruby-dev rubygems build-essential rpm
           sudo gem install --no-document fpm
 
-      # 2️⃣ 安装 Custom Go 1.24
-      - name: Install Custom Go
+      # 3️⃣ 安装你指定的自定义 Legacy Go (解决 syscall 问题)
+      - name: Install Your Custom Legacy Go
         run: |
-          curl -L -o go.tar.gz https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+          curl -L -o go.tar.gz https://github.com/yaoruisheng/go/releases/download/go-legacy-amd64-14/go-legacy-amd64.tar.gz
           mkdir -p $HOME/custom_go
           tar -xzf go.tar.gz -C $HOME/custom_go --strip-components=1
           echo "GOROOT=$HOME/custom_go" >> $GITHUB_ENV
-          echo "PATH=$HOME/custom_go/bin:$HOME/go/bin:$PATH" >> $GITHUB_ENV
+          echo "PATH=$HOME/custom_go/bin:$PATH" >> $GITHUB_ENV
 
-      # 3️⃣ 安装 Go 插件 (Makefile 中的 capnp 目标需要)
+      # 4️⃣ 安装 Makefile 必需插件
       - name: Install Go Tools
         run: |
           go install capnproto.org/go/capnp/v3/capnpc-go@latest
-          go install golang.org/x/tools/cmd/goimports@latest
 
-      # 4️⃣ 编译与打包 (直接调用 Makefile 目标)
-      - name: Build and Package
+      # 5️⃣ 编译与命名优化 (将 Debian 标准名转换为官方发布名)
+      - name: Build and Prepare Official Assets
+        id: prep
         run: |
+          VERSION=${{ github.event.inputs.version }}
+          ARCH=${{ github.event.inputs.arch }}
+          
           # 设定交叉编译变量
           export GOOS=linux
-          export GOARCH=${{ github.event.inputs.arch }}
+          export GOARCH=$ARCH
           export CGO_ENABLED=0
           
-          # 手动创建一个符合 Makefile 要求的 VERSION 文件或环境变量
-          # 因为 Makefile 里用 git describe，如果 ref 是 tag 则会自动匹配
+          # 执行 Makefile 编译二进制和生成 DEB
+          make cloudflared VERSION="$VERSION"
+          make cloudflared-deb VERSION="$VERSION"
           
-          echo "Step 1: Building Binary..."
-          make cloudflared
+          # --- 重命名为 Cloudflare 官方发布风格 ---
+          # 1. 二进制：cloudflared -> cloudflared-linux-arm64
+          BINARY_NAME="cloudflared-linux-$ARCH"
+          mv cloudflared $BINARY_NAME
           
-          echo "Step 2: Building DEB Package..."
-          # cloudflared-deb 依赖二进制文件和 man 模板
-          # Makefile 会自动调用 fpm
-          make cloudflared-deb
+          # 2. DEB包：cloudflared_2026.2.0_arm64.deb -> cloudflared-linux-arm64.deb
+          DEB_TEMP=$(ls *.deb)
+          DEB_NAME="cloudflared-linux-$ARCH.deb"
+          mv "$DEB_TEMP" "$DEB_NAME"
           
-          # 整理产物
-          mkdir -p artifacts
-          cp cloudflared artifacts/
-          mv *.deb artifacts/
+          # 输出给后续步骤使用
+          echo "BINARY=$BINARY_NAME" >> $GITHUB_OUTPUT
+          echo "DEB=$DEB_NAME" >> $GITHUB_OUTPUT
 
-      # 5️⃣ 运行你的 Python 发布脚本
-      - name: Run Release Script
+      # 6️⃣ 使用原生 Action 发布到 GitHub Release
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: ${{ github.event.inputs.version }}
+          files: |
+            ${{ steps.prep.outputs.BINARY }}
+            ${{ steps.prep.outputs.DEB }}
+          generate_release_notes: true
         env:
-          # 从 Secrets 获取
-          API_KEY: ${{ secrets.GITHUB_TOKEN }}
-          KV_API_TOKEN: ${{ secrets.CF_KV_API_TOKEN }}
-          KV_ACCOUNT: ${{ secrets.CF_ACCOUNT_ID }}
-          KV_NAMESPACE: ${{ secrets.CF_KV_NAMESPACE }}
-          VERSION: ${{ github.event.inputs.version }}
-        run: |
-          pip install PyGithub requests
-          # 注意：Makefile 生成的 artifacts 目录路径需与脚本 --path 一致
-          python3 release_script.py \
-            --api-key "$API_KEY" \
-            --release-version "$VERSION" \
-            --path "./artifacts" \
-            --kv-api-token "$KV_API_TOKEN" \
-            --kv-account-id "$KV_ACCOUNT" \
-            --namespace-id "$KV_NAMESPACE"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 7️⃣ 上传 Artifact 备份 (Action 页面可下载)
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflared-build-${{ github.event.inputs.arch }}
+          path: |
+            ${{ steps.prep.outputs.BINARY }}
+            ${{ steps.prep.outputs.DEB }}
