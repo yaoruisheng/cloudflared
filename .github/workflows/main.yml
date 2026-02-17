@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # 1️⃣ 检出官方源码
+      # 1️⃣ 检出官方源码到主目录 (.)
       - name: Checkout cloudflared
         uses: actions/checkout@v4
         with:
@@ -25,14 +25,29 @@ jobs:
           ref: ${{ github.event.inputs.version }}
           fetch-depth: 0
 
-      # 2️⃣ 安装环境依赖 (对齐 Makefile 需求)
+      # 2️⃣ 检出你自己的仓库到临时目录 (tmp_patches)
+      - name: Checkout custom patches
+        uses: actions/checkout@v4
+        with:
+          path: tmp_patches
+
+      # 3️⃣ 应用补丁并清理临时目录
+      - name: Apply Headscale Patches
+        run: |
+          # 应用你仓库 patches 目录下的 patch 文件
+          git apply tmp_patches/patches/allow-upgrade-with-body.patch
+          # 删掉临时目录，确保主目录环境纯净
+          rm -rf tmp_patches
+          echo "Patches applied successfully."
+
+      # 4️⃣ 安装环境依赖 (对齐 Makefile 需求)
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y make capnproto libcapnp-dev ruby ruby-dev rubygems build-essential rpm
           sudo gem install --no-document fpm
 
-      # 3️⃣ 安装你指定的自定义 Legacy Go (解决 syscall 问题)
+      # 5️⃣ 安装你指定的自定义 Legacy Go (解决 syscall 问题)
       - name: Install Your Custom Legacy Go
         run: |
           curl -L -o go.tar.gz https://github.com/yaoruisheng/go/releases/download/go-legacy-amd64-14/go-legacy-amd64.tar.gz
@@ -41,42 +56,35 @@ jobs:
           echo "GOROOT=$HOME/custom_go" >> $GITHUB_ENV
           echo "PATH=$HOME/custom_go/bin:$PATH" >> $GITHUB_ENV
 
-      # 4️⃣ 安装 Makefile 必需插件
+      # 6️⃣ 安装 Makefile 必需插件
       - name: Install Go Tools
         run: |
           go install capnproto.org/go/capnp/v3/capnpc-go@latest
 
-      # 5️⃣ 编译与命名优化 (将 Debian 标准名转换为官方发布名)
+      # 7️⃣ 编译与命名优化 (路径与你原始版本完全一致)
       - name: Build and Prepare Official Assets
         id: prep
         run: |
           VERSION=${{ github.event.inputs.version }}
           ARCH=${{ github.event.inputs.arch }}
-          
-          # 设定交叉编译变量
           export GOOS=linux
           export GOARCH=$ARCH
           export CGO_ENABLED=0
           
-          # 执行 Makefile 编译二进制和生成 DEB
           make cloudflared VERSION="$VERSION"
           make cloudflared-deb VERSION="$VERSION"
           
-          # --- 重命名为 Cloudflare 官方发布风格 ---
-          # 1. 二进制：cloudflared -> cloudflared-linux-arm64
           BINARY_NAME="cloudflared-linux-$ARCH"
           mv cloudflared $BINARY_NAME
           
-          # 2. DEB包：cloudflared_2026.2.0_arm64.deb -> cloudflared-linux-arm64.deb
           DEB_TEMP=$(ls *.deb)
           DEB_NAME="cloudflared-linux-$ARCH.deb"
           mv "$DEB_TEMP" "$DEB_NAME"
           
-          # 输出给后续步骤使用
           echo "BINARY=$BINARY_NAME" >> $GITHUB_OUTPUT
           echo "DEB=$DEB_NAME" >> $GITHUB_OUTPUT
 
-      # 6️⃣ 使用原生 Action 发布到 GitHub Release
+      # 8️⃣ 发布到 GitHub Release
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -89,7 +97,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 7️⃣ 上传 Artifact 备份 (Action 页面可下载)
+      # 9️⃣ 上传 Artifact 备份
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
