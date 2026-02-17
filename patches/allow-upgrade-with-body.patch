@@ -28,8 +28,14 @@
 
 --- a/carrier/websocket.go
 +++ b/carrier/websocket.go
-@@ -93,3 +93,3 @@
- 	for _, header := range stripWebsocketHeaders {
--		wsHeaders.Del(header)
-+		// [Headscale Fix]
+@@ -91,6 +91,7 @@
  	}
+ 	// Assume the header keys are in canonical format.
+-	for _, header := range stripWebsocketHeaders {
+-		wsHeaders.Del(header)
+-	}
++	// [Headscale Fix] Do not strip headers
++	// for _, header := range stripWebsocketHeaders {
++	// 	wsHeaders.Del(header)
++	// }
+ 	wsHeaders.Set("Host", req.Host) // See TUN-1097
