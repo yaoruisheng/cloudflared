@@ -4,6 +4,7 @@
  	dest.Set(CanonicalResponseUserHeaders, SerializeHeaders(userHeaders))
  
  	rp.setResponseMetaHeader(responseMetaHeaderOrigin)
+-	// HTTP2 removes support for 101 Switching Protocols https://tools.ietf.org/html/rfc7540#section-8.1.1
 -	if status == http.StatusSwitchingProtocols {
 -		status = http.StatusOK
 -	}
@@ -15,8 +16,10 @@
  
  func stripWebsocketUpgradeHeader(r *http.Request) {
 -	r.Header.Del(InternalUpgradeHeader)
-+	return 
++	return
  }
+ 
+ // getRequestHost returns the host of the http.Request.
 
 --- a/proxy/proxy.go
 +++ b/proxy/proxy.go
@@ -31,7 +34,7 @@
  	} else {
  		// Support for WSGI Servers by switching transfer encoding from chunked to gzip/deflate
  		if disableChunkedEncoding {
-@@ -211,6 +211,13 @@
+@@ -212,8 +212,13 @@
  	isWebsocket := isWebsocketUpgrade(req)
  
  	if isWebsocket {
@@ -51,30 +54,10 @@
 --- a/carrier/websocket.go
 +++ b/carrier/websocket.go
 @@ -91,9 +91,6 @@
+ 	for key, val := range req.Header {
+ 		wsHeaders[key] = val
  	}
--	for _, header := range stripWebsocketHeaders {
--		wsHeaders.Del(header)
--	}
- 	wsHeaders.Set("Host", req.Host)@@ -213,6 +213,12 @@
- 	if isWebsocket {
--		req.Header.Set("Connection", "Upgrade")
--		req.Header.Set("Upgrade", "websocket")
-+		req.Header.Del("Cf-Cloudflared-Proxy-Connection-Upgrade")
-+		req.Header.Set("Connection", "Upgrade")
-+		req.Header.Set("Upgrade", "websocket")
-+		if req.Method == "POST" {
-+			req.Body = tr.Request.Body
-+			req.ContentLength = tr.Request.ContentLength
-+		}
- 	}
- 	
- 	return p.roundTripper.RoundTrip(req)
-
---- a/carrier/websocket.go
-+++ b/carrier/websocket.go
-@@ -91,9 +91,6 @@
- 	}
- 	// Assume the header keys are in canonical format.
+-	// Assume the header keys are in canonical format.
 -	for _, header := range stripWebsocketHeaders {
 -		wsHeaders.Del(header)
 -	}
