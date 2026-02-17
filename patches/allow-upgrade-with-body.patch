@@ -4,7 +4,6 @@
  	dest.Set(CanonicalResponseUserHeaders, SerializeHeaders(userHeaders))
  
  	rp.setResponseMetaHeader(responseMetaHeaderOrigin)
--	// HTTP2 removes support for 101 Switching Protocols https://tools.ietf.org/html/rfc7540#section-8.1.1
 -	if status == http.StatusSwitchingProtocols {
 -		status = http.StatusOK
 -	}
@@ -18,8 +17,6 @@
 -	r.Header.Del(InternalUpgradeHeader)
 +	return 
  }
- 
- // getRequestHost returns the host of the http.Request.
 
 --- a/proxy/proxy.go
 +++ b/proxy/proxy.go
@@ -34,7 +31,31 @@
  	} else {
  		// Support for WSGI Servers by switching transfer encoding from chunked to gzip/deflate
  		if disableChunkedEncoding {
-@@ -213,6 +213,12 @@
+@@ -211,6 +211,13 @@
+ 	isWebsocket := isWebsocketUpgrade(req)
+ 
+ 	if isWebsocket {
+-		req.Header.Set("Connection", "Upgrade")
+-		req.Header.Set("Upgrade", "websocket")
++		req.Header.Del("Cf-Cloudflared-Proxy-Connection-Upgrade")
++		req.Header.Set("Connection", "Upgrade")
++		req.Header.Set("Upgrade", "websocket")
++		if req.Method == "POST" {
++			req.Body = tr.Request.Body
++			req.ContentLength = tr.Request.ContentLength
++		}
+ 	}
+ 
+ 	return p.roundTripper.RoundTrip(req)
+
+--- a/carrier/websocket.go
++++ b/carrier/websocket.go
+@@ -91,9 +91,6 @@
+ 	}
+-	for _, header := range stripWebsocketHeaders {
+-		wsHeaders.Del(header)
+-	}
+ 	wsHeaders.Set("Host", req.Host)@@ -213,6 +213,12 @@
  	if isWebsocket {
 -		req.Header.Set("Connection", "Upgrade")
 -		req.Header.Set("Upgrade", "websocket")
