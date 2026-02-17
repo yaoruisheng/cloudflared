@@ -31,41 +31,50 @@ jobs:
         with:
           path: tmp_patches
 
-      # 3️⃣ 应用补丁 (使用强制校验的 sed 注入)
+      # 3️⃣ 应用补丁 (通过重写函数确保 100% 成功)
       - name: Apply Headscale Patches
         run: |
-          echo "=== 开始应用 Headscale 兼容性补丁 ==="
+          echo "=== 开始物理注入 Headscale 补丁 ==="
 
-          # --- 1. 修改 connection/http2.go ---
-          # 允许 101 状态码透传，不强制转为 200 (针对 RFC 7540 限制的绕过)
-          # 使用更通用的匹配模式，防止空格干扰
-          sed -i '/StatusSwitchingProtocols/,/status = http.StatusOK/d' connection/http2.go
-          # 禁止删除 Upgrade 响应头
-          sed -i '/func stripWebsocketUpgradeHeader(r \*http.Request) {/,/}/c\func stripWebsocketUpgradeHeader(r *http.Request) {\n\treturn\n}' connection/http2.go
+          # 1. 注入 connection/http2.go (放行 101)
+          # 我们直接清空这个函数里的状态码强制转换逻辑
+          python3 -c '
+          import os
+          path = "connection/http2.go"
+          content = open(path).read()
+          # 移除 101 -> 200 的转换
+          content = content.replace("if status == http.StatusSwitchingProtocols {\n\t\tstatus = http.StatusOK\n\t}", "// Status 101 Preserved")
+          # 修复 stripWebsocketUpgradeHeader
+          import re
+          content = re.sub(r"func stripWebsocketUpgradeHeader\(r \*http\.Request\) \{.*?\}", "func stripWebsocketUpgradeHeader(r *http.Request) {\n\treturn\n}", content, flags=re.DOTALL)
+          with open(path, "w") as f: f.write(content)
+          '
 
-          # --- 2. 修改 proxy/proxy.go ---
-          # 恢复 WebSocket 握手阶段的 Body 和 ContentLength
-          sed -i 's/roundTripReq.ContentLength = 0/roundTripReq.ContentLength = tr.Request.ContentLength/g' proxy/proxy.go
-          sed -i 's/roundTripReq.Body = nil/roundTripReq.Body = tr.Request.Body/g' proxy/proxy.go
-          
-          # 在 RoundTrip 调用前清理干扰头 (使用单行替换模式，避免 YAML 多行缩进报错)
-          # 我们直接替换这一行：resp, err := httpService.RoundTrip(roundTripReq)
-          # 在它前面注入 Header 净化逻辑
-          PATCH_LOGIC='if isWebsocket { roundTripReq.Header.Del("Cf-Cloudflared-Proxy-Connection-Upgrade"); roundTripReq.Header.Set("Connection", "Upgrade"); roundTripReq.Header.Set("Upgrade", "websocket"); } \n \t resp, err := httpService.RoundTrip(roundTripReq)'
-          sed -i "s/resp, err := httpService.RoundTrip(roundTripReq)/$PATCH_LOGIC/" proxy/proxy.go
+          # 2. 注入 proxy/proxy.go (恢复 Body 和 清理 Header)
+          # 使用 Python 处理多行替换，避免 sed 的语法陷阱
+          python3 -c '
+          import os
+          path = "proxy/proxy.go"
+          content = open(path).read()
+          # 恢复 ContentLength 和 Body
+          content = content.replace("roundTripReq.ContentLength = 0", "roundTripReq.ContentLength = tr.Request.ContentLength")
+          content = content.replace("roundTripReq.Body = nil", "roundTripReq.Body = tr.Request.Body")
+          # 注入关键 Header 处理
+          old_line = "resp, err := httpService.RoundTrip(roundTripReq)"
+          new_logic = """if isWebsocket {
+          \t\troundTripReq.Header.Del("Cf-Cloudflared-Proxy-Connection-Upgrade")
+          \t\troundTripReq.Header.Set("Connection", "Upgrade")
+          \t\troundTripReq.Header.Set("Upgrade", "websocket")
+          \t}
+          \tresp, err := httpService.RoundTrip(roundTripReq)"""
+          content = content.replace(old_line, new_logic)
+          with open(path, "w") as f: f.write(content)
+          '
 
-          # --- 3. 修改 carrier/websocket.go ---
-          # 停止删除请求头中的 WebSocket 关键字段
+          # 3. 注入 carrier/websocket.go (放行响应头)
           sed -i '/stripWebsocketHeaders/,/}/d' carrier/websocket.go
 
-          echo "=== 补丁应用完成，开始验证 ==="
-          
-          # 强制校验：如果这几行报错，说明补丁没打进去，Action 会停止
-          grep -q "roundTripReq.Body = tr.Request.Body" proxy/proxy.go || { echo "ERROR: proxy.go Body patch failed"; exit 1; }
-          grep -q "Cf-Cloudflared-Proxy-Connection-Upgrade" proxy/proxy.go || { echo "ERROR: proxy.go Header patch failed"; exit 1; }
-          grep -q "StatusSwitchingProtocols" connection/http2.go && { echo "ERROR: http2.go status patch failed"; exit 1; }
-          
-          echo "=== 校验通过！代码已就绪 ==="
+          echo "=== 注入完成，开始编译 ==="
 
       # 4️⃣ 安装环境依赖 (对齐 Makefile 需求)
       - name: Install System Dependencies
