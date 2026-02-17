@@ -1,41 +1,36 @@
 --- a/connection/http2.go
 +++ b/connection/http2.go
-@@ -112,3 +112,3 @@
- 	case TypeWebsocket, TypeHTTP:
--		stripWebsocketUpgradeHeader(r)
-+		// [Headscale Fix]
- 		// Check for tracing on request
-@@ -328,3 +329,3 @@
+@@ -325,7 +325,7 @@
+ }
+ 
  func stripWebsocketUpgradeHeader(r *http.Request) {
 -	r.Header.Del(InternalUpgradeHeader)
-+	// [Headscale Fix]
++	return 
  }
+ 
+ // getRequestHost returns the host of the http.Request.
 
 --- a/proxy/proxy.go
 +++ b/proxy/proxy.go
-@@ -167,4 +167,9 @@
+@@ -165,8 +165,8 @@
+ 		roundTripReq.Header.Set("Connection", "Upgrade")
+ 		roundTripReq.Header.Set("Upgrade", "websocket")
  		roundTripReq.Header.Set("Sec-Websocket-Version", "13")
 -		roundTripReq.ContentLength = 0
 -		roundTripReq.Body = nil
-+		if tr.Request.Method == http.MethodGet || tr.Request.Method == http.MethodHead {
-+			roundTripReq.ContentLength = 0
-+			roundTripReq.Body = nil
-+		} else {
-+			roundTripReq.ContentLength = tr.Request.ContentLength
-+			roundTripReq.Body = tr.Request.Body
-+		}
++		roundTripReq.ContentLength = tr.Request.ContentLength
++		roundTripReq.Body = tr.Request.Body
  	} else {
+ 		// Support for WSGI Servers by switching transfer encoding from chunked to gzip/deflate
+ 		if disableChunkedEncoding {
 
 --- a/carrier/websocket.go
 +++ b/carrier/websocket.go
-@@ -91,6 +91,7 @@
+@@ -91,9 +91,6 @@
  	}
  	// Assume the header keys are in canonical format.
 -	for _, header := range stripWebsocketHeaders {
 -		wsHeaders.Del(header)
 -	}
-+	// [Headscale Fix] Do not strip headers
-+	// for _, header := range stripWebsocketHeaders {
-+	// 	wsHeaders.Del(header)
-+	// }
  	wsHeaders.Set("Host", req.Host) // See TUN-1097
+ 	return wsHeaders
