@@ -1,6 +1,17 @@
 --- a/connection/http2.go
 +++ b/connection/http2.go
-@@ -325,7 +325,7 @@
+@@ -201,10 +201,6 @@
+ 	dest.Set(CanonicalResponseUserHeaders, SerializeHeaders(userHeaders))
+ 
+ 	rp.setResponseMetaHeader(responseMetaHeaderOrigin)
+-	// HTTP2 removes support for 101 Switching Protocols https://tools.ietf.org/html/rfc7540#section-8.1.1
+-	if status == http.StatusSwitchingProtocols {
+-		status = http.StatusOK
+-	}
+ 	rp.w.WriteHeader(status)
+ 	if shouldFlush(header) {
+ 		rp.shouldFlush = true
+@@ -325,7 +321,7 @@
  }
  
  func stripWebsocketUpgradeHeader(r *http.Request) {
@@ -23,6 +34,20 @@
  	} else {
  		// Support for WSGI Servers by switching transfer encoding from chunked to gzip/deflate
  		if disableChunkedEncoding {
+@@ -213,6 +213,12 @@
+ 	if isWebsocket {
+-		req.Header.Set("Connection", "Upgrade")
+-		req.Header.Set("Upgrade", "websocket")
++		req.Header.Del("Cf-Cloudflared-Proxy-Connection-Upgrade")
++		req.Header.Set("Connection", "Upgrade")
++		req.Header.Set("Upgrade", "websocket")
++		if req.Method == "POST" {
++			req.Body = tr.Request.Body
++			req.ContentLength = tr.Request.ContentLength
++		}
+ 	}
+ 	
+ 	return p.roundTripper.RoundTrip(req)
 
 --- a/carrier/websocket.go
 +++ b/carrier/websocket.go
