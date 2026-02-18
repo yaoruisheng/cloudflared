@@ -49,7 +49,7 @@ jobs:
           # 清理临时目录
           rm -rf tmp_patches
           echo "Patches applied successfully using patch -p1."
-          exit 1
+          #exit 1
 
       # 4️⃣ 安装环境依赖 (对齐 Makefile 需求)
       - name: Install System Dependencies
