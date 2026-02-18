@@ -1,41 +1,71 @@
---- a/connection/http2.go
-+++ b/connection/http2.go
-@@ -112,3 +112,3 @@
- 	case TypeWebsocket, TypeHTTP:
--		stripWebsocketUpgradeHeader(r)
-+		// [Headscale Fix]
- 		// Check for tracing on request
-@@ -328,3 +329,3 @@
- func stripWebsocketUpgradeHeader(r *http.Request) {
--	r.Header.Del(InternalUpgradeHeader)
-+	// [Headscale Fix]
- }
-
---- a/proxy/proxy.go
-+++ b/proxy/proxy.go
-@@ -167,4 +167,9 @@
- 		roundTripReq.Header.Set("Sec-Websocket-Version", "13")
--		roundTripReq.ContentLength = 0
--		roundTripReq.Body = nil
-+		if tr.Request.Method == http.MethodGet || tr.Request.Method == http.MethodHead {
-+			roundTripReq.ContentLength = 0
-+			roundTripReq.Body = nil
-+		} else {
-+			roundTripReq.ContentLength = tr.Request.ContentLength
-+			roundTripReq.Body = tr.Request.Body
-+		}
- 	} else {
-
+diff --git a/carrier/websocket.go b/carrier/websocket.go
+index 31075210..9c4400f5 100644
 --- a/carrier/websocket.go
 +++ b/carrier/websocket.go
-@@ -91,6 +91,7 @@
+@@ -109,9 +109,9 @@ func websocketHeaders(req *http.Request) http.Header {
+ 		wsHeaders[key] = val
  	}
  	// Assume the header keys are in canonical format.
 -	for _, header := range stripWebsocketHeaders {
 -		wsHeaders.Del(header)
 -	}
-+	// [Headscale Fix] Do not strip headers
-+	// for _, header := range stripWebsocketHeaders {
-+	// 	wsHeaders.Del(header)
-+	// }
++	//for _, header := range stripWebsocketHeaders {
++	//	wsHeaders.Del(header)
++	//}
  	wsHeaders.Set("Host", req.Host) // See TUN-1097
+ 	return wsHeaders
+ }
+diff --git a/connection/http2.go b/connection/http2.go
+index c7e14c67..36e74b7e 100644
+--- a/connection/http2.go
++++ b/connection/http2.go
+@@ -270,9 +270,9 @@ func (rp *http2RespWriter) WriteRespHeaders(status int, header http.Header) erro
+ 
+ 	rp.setResponseMetaHeader(responseMetaHeaderOrigin)
+ 	// HTTP2 removes support for 101 Switching Protocols https://tools.ietf.org/html/rfc7540#section-8.1.1
+-	if status == http.StatusSwitchingProtocols {
+-		status = http.StatusOK
+-	}
++	//if status == http.StatusSwitchingProtocols {
++	//	status = http.StatusOK
++	//}
+ 	rp.w.WriteHeader(status)
+ 	if shouldFlush(header) {
+ 		rp.shouldFlush = true
+@@ -420,7 +420,7 @@ func IsTCPStream(r *http.Request) bool {
+ }
+ 
+ func stripWebsocketUpgradeHeader(r *http.Request) {
+-	r.Header.Del(InternalUpgradeHeader)
++	return
+ }
+ 
+ // getRequestHost returns the host of the http.Request.
+diff --git a/proxy/proxy.go b/proxy/proxy.go
+index e5d7fc6d..4647a91f 100644
+--- a/proxy/proxy.go
++++ b/proxy/proxy.go
+@@ -197,8 +197,8 @@ func (p *Proxy) proxyHTTPRequest(
+ 		roundTripReq.Header.Set("Connection", "Upgrade")
+ 		roundTripReq.Header.Set("Upgrade", "websocket")
+ 		roundTripReq.Header.Set("Sec-Websocket-Version", "13")
+-		roundTripReq.ContentLength = 0
+-		roundTripReq.Body = nil
++		roundTripReq.ContentLength = tr.Request.ContentLength
++		roundTripReq.Body = tr.Request.Body
+ 	} else {
+ 		// Support for WSGI Servers by switching transfer encoding from chunked to gzip/deflate
+ 		if disableChunkedEncoding {
+@@ -217,6 +217,12 @@ func (p *Proxy) proxyHTTPRequest(
+ 		roundTripReq.Header.Set("User-Agent", "")
+ 	}
+ 
++        if isWebsocket {
++                roundTripReq.Header.Del("Cf-Cloudflared-Proxy-Connection-Upgrade")
++                roundTripReq.Header.Set("Connection", "Upgrade")
++                roundTripReq.Header.Set("Upgrade", "websocket")
++        }
++
+ 	_, ttfbSpan := tr.Tracer().Start(tr.Context(), "ttfb_origin")
+ 	resp, err := httpService.RoundTrip(roundTripReq)
+ 	if err != nil {
