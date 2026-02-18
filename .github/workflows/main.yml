@@ -37,19 +37,19 @@ jobs:
           # 确保在 cloudflared 源码根目录下运行
           
           # 清理编码
-          find . -type f -name "*.go" -exec sed -i 's/\xc2\xa0/ /g' {} +
+          #find . -type f -name "*.go" -exec sed -i 's/\xc2\xa0/ /g' {} +
           # 打补丁
           patch -p1 --ignore-whitespace < tmp_patches/patches/allow-upgrade-with-body.patch
           
           echo "=== 物理一致性检查 ==="
-          # 检查 proxy.go 是否包含 Body 转发逻辑
-          grep "roundTripReq.Body = tr.Request.Body" proxy/proxy.go
-          grep -C 2 "roundTripReq.ContentLength" proxy/proxy.go
-          # 检查 http2.go 是否注释掉了 101->200
+          echo "检查 proxy.go 是否包含 Body 转发逻辑"
+          grep -C 5 "isWebsocket" proxy/proxy.go
+          echo "检查 http2.go 是否注释掉了 101->200"
           grep -C 2 "StatusSwitchingProtocols" connection/http2.go
           # 清理临时目录
           rm -rf tmp_patches
           echo "Patches applied successfully using patch -p1."
+          exit 1
 
       # 4️⃣ 安装环境依赖 (对齐 Makefile 需求)
       - name: Install System Dependencies
