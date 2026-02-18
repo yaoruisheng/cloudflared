@@ -42,7 +42,7 @@ index c7e14c67..36e74b7e 100644
  
  // getRequestHost returns the host of the http.Request.
 diff --git a/proxy/proxy.go b/proxy/proxy.go
-index e5d7fc6d..4647a91f 100644
+index e5d7fc6d..c509e480 100644
 --- a/proxy/proxy.go
 +++ b/proxy/proxy.go
 @@ -197,8 +197,8 @@ func (p *Proxy) proxyHTTPRequest(
@@ -51,8 +51,8 @@ index e5d7fc6d..4647a91f 100644
  		roundTripReq.Header.Set("Sec-Websocket-Version", "13")
 -		roundTripReq.ContentLength = 0
 -		roundTripReq.Body = nil
-+		roundTripReq.ContentLength = tr.Request.ContentLength
-+		roundTripReq.Body = tr.Request.Body
++		//roundTripReq.ContentLength = 0
++		//roundTripReq.Body = nil
  	} else {
  		// Support for WSGI Servers by switching transfer encoding from chunked to gzip/deflate
  		if disableChunkedEncoding {
