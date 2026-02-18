@@ -44,6 +44,7 @@ jobs:
           echo "=== 物理一致性检查 ==="
           # 检查 proxy.go 是否包含 Body 转发逻辑
           grep "roundTripReq.Body = tr.Request.Body" proxy/proxy.go
+          grep -C 2 "roundTripReq.ContentLength" proxy/proxy.go
           # 检查 http2.go 是否注释掉了 101->200
           grep -C 2 "StatusSwitchingProtocols" connection/http2.go
           # 清理临时目录
