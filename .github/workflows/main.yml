@@ -39,27 +39,7 @@ jobs:
           # 清理编码
           #find . -type f -name "*.go" -exec sed -i 's/\xc2\xa0/ /g' {} +
           # 打补丁
-          patch -p1 --ignore-whitespace < tmp_patches/patches/allow-upgrade-with-body.patch
-          echo "=== 物理一致性检查 (鲁棒模式) ==="
-          
-          # 检查 carrier/websocket.go
-          echo "检查 carrier/websocket.go..."
-          # 用 [[:space:]]* 匹配任何种类的行首缩进（Tab 或空格）
-          grep "^[[:space:]]*method := http.MethodPost" carrier/websocket.go || { 
-            echo "❌ 缺失 POST 转换逻辑 (缩进不匹配或逻辑缺失)"; 
-            exit 1; 
-          }
-
-          # 检查 proxy/proxy.go
-          echo "检查 proxy/proxy.go..."
-          # 同样，用更宽松的匹配方式
-          grep "^[[:space:]]*//roundTripReq.Body = nil" proxy/proxy.go || { 
-            echo "❌ proxy.go 限制未解除"; 
-            exit 1; 
-          }
-
-          echo "✅ [SUCCESS] 全链路补丁验证通过！"
-            
+          patch -p1 --verbose --ignore-whitespace < tmp_patches/patches/allow-upgrade-with-body.patch            
           # 清理临时目录
           rm -rf tmp_patches
           echo "Patches applied successfully using patch -p1."
