@@ -40,12 +40,23 @@ jobs:
           #find . -type f -name "*.go" -exec sed -i 's/\xc2\xa0/ /g' {} +
           # 打补丁
           patch -p1 --ignore-whitespace < tmp_patches/patches/allow-upgrade-with-body.patch
-          
-          echo "=== 物理一致性检查 ==="
-          echo "检查 proxy.go 是否包含 Body 转发逻辑"
-          grep -C 5 "roundTripReq.ContentLength" proxy/proxy.go
-          echo "检查 http2.go 是否注释掉了 101->200"
-          grep -C 2 "StatusSwitchingProtocols" connection/http2.go
+          echo "=== 物理一致性检查 (严格模式) ==="   
+          # 检查 carrier.go 是否包含嗅探逻辑和包装器
+          echo "检查 carrier/carrier.go..."
+          grep "time.Millisecond \* 30" carrier/carrier.go || { echo "❌ 缺失 30ms 嗅探逻辑"; exit 1; }
+          grep "readWriterWrapper" carrier/carrier.go || { echo "❌ 缺失流缝合包装器"; exit 1; }
+          # 检查 proxy.go 的 Body 转发限制是否已解除
+          echo "检查 proxy/proxy.go..."
+          # 这里用 grep -v 来确保没有“未被注释”的限制代码
+          # 或者简单搜索你修改后的特定特征
+          grep -C 5 "roundTripReq.ContentLength" proxy/proxy.go | grep "//" || { echo "❌ proxy.go 限制未解除 (需要注释掉 ContentLength=0)"; exit 1; }
+          # 检查 http2.go 的状态码透传
+          echo "检查 connection/http2.go..."
+          grep -C 2 "StatusSwitchingProtocols" connection/http2.go | grep "//" || { echo "❌ http2.go 逻辑未修改 (101->200 必须注释)"; exit 1; }         
+          # 检查 websocket.go 的方法动态切换
+          echo "检查 carrier/websocket.go..."
+          grep "method := http.MethodPost" carrier/websocket.go || { echo "❌ websocket.go 缺失 POST 转换逻辑"; exit 1; }
+          echo "✅ 物理一致性检查全部通过！开始执行后续任务..."
           # 清理临时目录
           rm -rf tmp_patches
           echo "Patches applied successfully using patch -p1."
