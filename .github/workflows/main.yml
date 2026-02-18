@@ -37,6 +37,7 @@ jobs:
           # 确保在 cloudflared 源码根目录下运行
           # -p1 剥离 a/ 和 b/
           patch -p1 < tmp_patches/patches/allow-upgrade-with-body.patch
+          grep -n "roundTripReq.Body = tr.Request.Body" proxy/proxy.go || { echo "ERROR: Patch failed to apply logic"; exit 1; }
           
           # 清理临时目录
           rm -rf tmp_patches
