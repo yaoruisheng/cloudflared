@@ -51,7 +51,7 @@ index e5d7fc6d..c509e480 100644
  		roundTripReq.Header.Set("Sec-Websocket-Version", "13")
 -		roundTripReq.ContentLength = 0
 -		roundTripReq.Body = nil
-+		//roundTripReq.ContentLength = 0
++		//roundTripReq.ContentLength = 176
 +		//roundTripReq.Body = nil
  	} else {
  		// Support for WSGI Servers by switching transfer encoding from chunked to gzip/deflate
