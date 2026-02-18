@@ -1,71 +1,123 @@
+diff --git a/carrier/carrier.go b/carrier/carrier.go
+index 5f4fc834..8b663f4c 100644
+--- a/carrier/carrier.go
++++ b/carrier/carrier.go
+@@ -12,6 +12,9 @@ import (
+ 	"net/url"
+ 	"os"
+ 	"strings"
++	"bytes"
++    "bufio"
++    "time"
+ 
+ 	"github.com/pkg/errors"
+ 	"github.com/rs/zerolog"
+@@ -33,6 +36,7 @@ type StartOptions struct {
+ 	TLSClientConfig       *tls.Config
+ 	AutoCloseInterstitial bool
+ 	IsFedramp             bool
++	Payload                 []byte
+ }
+ 
+ // Connection wraps up all the needed functions to forward over the tunnel
+@@ -112,7 +116,34 @@ func Serve(remoteConn Connection, listener net.Listener, shutdownC <-chan struct
+ // serveConnection handles connections for the Serve() call
+ func serveConnection(remoteConn Connection, c net.Conn, options *StartOptions) {
+ 	defer c.Close()
+-	_ = remoteConn.ServeStream(options, c)
++
++	br := bufio.NewReader(c)
++	var payload []byte
++
++	c.SetReadDeadline(time.Now().Add(time.Millisecond * 30))
++    
++	_, _ = br.Peek(1)
++	
++	if n := br.Buffered(); n > 0 {
++		peekData, _ := br.Peek(n)
++		payload = make([]byte, n)
++		copy(payload, peekData)
++	}
++	
++	c.SetReadDeadline(time.Time{})
++
++	connOptions := *options
++	connOptions.Payload = payload
++
++	_ = remoteConn.ServeStream(&connOptions, &readWriterWrapper{
++		Reader: br,
++		Writer: c,
++	})
++}
++
++type readWriterWrapper struct {
++	io.Reader
++	io.Writer
+ }
+ 
+ // IsAccessResponse checks the http Response to see if the url location
+@@ -145,12 +176,25 @@ func BuildAccessRequest(options *StartOptions, log *zerolog.Logger) (*http.Reque
+ 		return nil, err
+ 	}
+ 
+-	// We need to create a new request as FetchToken will modify req (boo mutable)
+-	// as it has to follow redirect on the API and such, so here we init a new one
+-	originRequest, err := http.NewRequest(http.MethodGet, options.OriginURL, nil)
++	
++	method := http.MethodGet
++	var body io.Reader
++	
++	if len(options.Payload) > 0 {
++		method = http.MethodPost
++		body = bytes.NewReader(options.Payload)
++	}
++
++	originRequest, err := http.NewRequest(method, options.OriginURL, body)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++
++	if len(options.Payload) > 0 {
++		originRequest.ContentLength = int64(len(options.Payload))
++	}
++
++
+ 	originRequest.Header.Set(CFAccessTokenHeader, token)
+ 
+ 	for k, v := range options.Headers {
 diff --git a/carrier/websocket.go b/carrier/websocket.go
-index 31075210..9c4400f5 100644
+index 31075210..3d042bcf 100644
 --- a/carrier/websocket.go
 +++ b/carrier/websocket.go
-@@ -109,9 +109,9 @@ func websocketHeaders(req *http.Request) http.Header {
- 		wsHeaders[key] = val
- 	}
- 	// Assume the header keys are in canonical format.
--	for _, header := range stripWebsocketHeaders {
--		wsHeaders.Del(header)
--	}
-+	//for _, header := range stripWebsocketHeaders {
-+	//	wsHeaders.Del(header)
-+	//}
- 	wsHeaders.Set("Host", req.Host) // See TUN-1097
- 	return wsHeaders
- }
-diff --git a/connection/http2.go b/connection/http2.go
-index c7e14c67..36e74b7e 100644
---- a/connection/http2.go
-+++ b/connection/http2.go
-@@ -270,9 +270,9 @@ func (rp *http2RespWriter) WriteRespHeaders(status int, header http.Header) erro
+@@ -5,6 +5,7 @@ import (
+ 	"net/http"
+ 	"net/http/httputil"
+ 	"net/url"
++    "bytes"
  
- 	rp.setResponseMetaHeader(responseMetaHeaderOrigin)
- 	// HTTP2 removes support for 101 Switching Protocols https://tools.ietf.org/html/rfc7540#section-8.1.1
--	if status == http.StatusSwitchingProtocols {
--		status = http.StatusOK
--	}
-+	//if status == http.StatusSwitchingProtocols {
-+	//	status = http.StatusOK
-+	//}
- 	rp.w.WriteHeader(status)
- 	if shouldFlush(header) {
- 		rp.shouldFlush = true
-@@ -420,7 +420,7 @@ func IsTCPStream(r *http.Request) bool {
- }
- 
- func stripWebsocketUpgradeHeader(r *http.Request) {
--	r.Header.Del(InternalUpgradeHeader)
-+	return
- }
- 
- // getRequestHost returns the host of the http.Request.
-diff --git a/proxy/proxy.go b/proxy/proxy.go
-index e5d7fc6d..c509e480 100644
---- a/proxy/proxy.go
-+++ b/proxy/proxy.go
-@@ -197,8 +197,8 @@ func (p *Proxy) proxyHTTPRequest(
- 		roundTripReq.Header.Set("Connection", "Upgrade")
- 		roundTripReq.Header.Set("Upgrade", "websocket")
- 		roundTripReq.Header.Set("Sec-Websocket-Version", "13")
--		roundTripReq.ContentLength = 0
--		roundTripReq.Body = nil
-+		roundTripReq.ContentLength = tr.Request.ContentLength
-+		roundTripReq.Body = tr.Request.Body
- 	} else {
- 		// Support for WSGI Servers by switching transfer encoding from chunked to gzip/deflate
- 		if disableChunkedEncoding {
-@@ -217,6 +217,12 @@ func (p *Proxy) proxyHTTPRequest(
- 		roundTripReq.Header.Set("User-Agent", "")
- 	}
- 
-+        if isWebsocket {
-+                roundTripReq.Header.Del("Cf-Cloudflared-Proxy-Connection-Upgrade")
-+                roundTripReq.Header.Set("Connection", "Upgrade")
-+                roundTripReq.Header.Set("Upgrade", "websocket")
-+        }
+ 	"github.com/gorilla/websocket"
+ 	"github.com/rs/zerolog"
+@@ -46,10 +47,22 @@ func (ws *Websocket) ServeStream(options *StartOptions, conn io.ReadWriter) erro
+ // It also handles redirects from Access and will present that flow if
+ // the token is not present on the request
+ func createWebsocketStream(options *StartOptions, log *zerolog.Logger) (*cfwebsocket.GorillaConn, error) {
+-	req, err := http.NewRequest(http.MethodGet, options.OriginURL, nil)
++    method := http.MethodGet
++	var body io.Reader
++	if len(options.Payload) > 0 {
++		method = http.MethodPost
++		body = bytes.NewReader(options.Payload)
++	}
 +
- 	_, ttfbSpan := tr.Tracer().Start(tr.Context(), "ttfb_origin")
- 	resp, err := httpService.RoundTrip(roundTripReq)
++	req, err := http.NewRequest(method, options.OriginURL, body)
  	if err != nil {
+ 		return nil, err
+ 	}
++	
++	if len(options.Payload) > 0 {
++		req.ContentLength = int64(len(options.Payload))
++	}
++
+ 	req.Header = options.Headers
+ 	if options.Host != "" {
+ 		req.Host = options.Host
