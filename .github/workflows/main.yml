@@ -43,7 +43,7 @@ jobs:
           
           echo "=== 物理一致性检查 ==="
           echo "检查 proxy.go 是否包含 Body 转发逻辑"
-          grep -C 5 "isWebsocket" proxy/proxy.go
+          grep -C 5 "roundTripReq.ContentLength" proxy/proxy.go
           echo "检查 http2.go 是否注释掉了 101->200"
           grep -C 2 "StatusSwitchingProtocols" connection/http2.go
           # 清理临时目录
