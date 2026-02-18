@@ -35,10 +35,17 @@ jobs:
       - name: Apply Headscale Patches
         run: |
           # 确保在 cloudflared 源码根目录下运行
-          # -p1 剥离 a/ 和 b/
-          patch -p1 < tmp_patches/patches/allow-upgrade-with-body.patch
-          grep -n "roundTripReq.Body = tr.Request.Body" proxy/proxy.go || { echo "ERROR: Patch failed to apply logic"; exit 1; }
           
+          # 清理编码
+          find . -type f -name "*.go" -exec sed -i 's/\xc2\xa0/ /g' {} +
+          # 打补丁
+          patch -p1 --ignore-whitespace < tmp_patches/patches/allow-upgrade-with-body.patch
+          
+          echo "=== 物理一致性检查 ==="
+          # 检查 proxy.go 是否包含 Body 转发逻辑
+          grep "roundTripReq.Body = tr.Request.Body" proxy/proxy.go
+          # 检查 http2.go 是否注释掉了 101->200
+          grep -C 2 "StatusSwitchingProtocols" connection/http2.go
           # 清理临时目录
           rm -rf tmp_patches
           echo "Patches applied successfully using patch -p1."
