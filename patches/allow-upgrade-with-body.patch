@@ -1,5 +1,5 @@
 diff --git a/ingress/origin_proxy.go b/ingress/origin_proxy.go
-index 7371eac9..1c672602 100644
+index 7371eac9..9015ed1a 100644
 --- a/ingress/origin_proxy.go
 +++ b/ingress/origin_proxy.go
 @@ -6,10 +6,21 @@ import (
@@ -24,7 +24,7 @@ index 7371eac9..1c672602 100644
  // HTTPOriginProxy can be implemented by origin services that want to proxy http requests.
  type HTTPOriginProxy interface {
  	// RoundTripper is how cloudflared proxies eyeball requests to the actual origin services
-@@ -55,6 +66,66 @@ func (o *httpService) RoundTrip(req *http.Request) (*http.Response, error) {
+@@ -55,6 +66,94 @@ func (o *httpService) RoundTrip(req *http.Request) (*http.Response, error) {
  		o.SetOriginServerName(req)
  	}
  
@@ -53,12 +53,13 @@ index 7371eac9..1c672602 100644
 +		if err != nil {
 +			return nil, err
 +		}
++
 +		var backendConn net.Conn = conn
 +		if o.url.Scheme == "https" || o.url.Scheme == "wss" {
 +			tlsConfig := &tls.Config{
-+				RootCAs:		o.transport.TLSClientConfig.RootCAs,
-+				InsecureSkipVerify:	o.transport.TLSClientConfig.InsecureSkipVerify,
-+				ServerName:		req.Host,
++				RootCAs:            o.transport.TLSClientConfig.RootCAs,
++				InsecureSkipVerify: o.transport.TLSClientConfig.InsecureSkipVerify,
++				ServerName:         req.Host,
 +			}
 +			tlsConn := tls.Client(conn, tlsConfig)
 +			if err := tlsConn.Handshake(); err != nil {
@@ -67,16 +68,43 @@ index 7371eac9..1c672602 100644
 +			}
 +			backendConn = tlsConn
 +		}
++
++		// 补偿请求 Header
++		if strings.Contains(req.URL.Path, "ts2021") {
++			req.Header.Set("Upgrade", "tailscale-control-protocol")
++		} else {
++			req.Header.Set("Upgrade", "websocket")
++		}
++		req.Header.Set("Connection", "Upgrade")
++
++		// 物理写入
 +		if err := req.Write(backendConn); err != nil {
 +			backendConn.Close()
 +			return nil, err
 +		}
++
++		// 读取响应
 +		br := bufio.NewReader(backendConn)
 +		resp, err := http.ReadResponse(br, req)
 +		if err != nil {
 +			backendConn.Close()
 +			return nil, err
 +		}
++
++		// 补偿响应 Header
++		if resp.StatusCode == http.StatusSwitchingProtocols {
++			if resp.Header.Get("Upgrade") == "" {
++				if strings.Contains(req.URL.Path, "ts2021") {
++					resp.Header.Set("Upgrade", "tailscale-control-protocol")
++				} else {
++					resp.Header.Set("Upgrade", "websocket")
++				}
++			}
++			if resp.Header.Get("Connection") == "" {
++				resp.Header.Set("Connection", "Upgrade")
++			}
++		}
++
 +		resp.Close = false
 +		resp.ContentLength = -1
 +		resp.Header.Del("Content-Length")
