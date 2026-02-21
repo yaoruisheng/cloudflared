@@ -1,5 +1,5 @@
 diff --git a/ingress/origin_proxy.go b/ingress/origin_proxy.go
-index 7371eac9..998d53d3 100644
+index 7371eac9..f102b58a 100644
 --- a/ingress/origin_proxy.go
 +++ b/ingress/origin_proxy.go
 @@ -6,10 +6,21 @@ import (
@@ -120,7 +120,7 @@ index 7371eac9..998d53d3 100644
 +		resp.Body = &readWriteCloseWrapper{
 +			Reader: br,
 +			Writer: backendConn,
-+			Closer: io.NopCloser(struct{ io.Closer }{backendConn}),
++			Closer: io.NopCloser(br),
 +		}
 +		return resp, nil
 +	}
