@@ -1,8 +1,8 @@
 diff --git a/ingress/origin_proxy.go b/ingress/origin_proxy.go
-index 7371eac9..5b86d686 100644
+index 7371eac9..998d53d3 100644
 --- a/ingress/origin_proxy.go
 +++ b/ingress/origin_proxy.go
-@@ -6,9 +6,23 @@ import (
+@@ -6,10 +6,21 @@ import (
  	"fmt"
  	"net"
  	"net/http"
@@ -13,132 +13,118 @@ index 7371eac9..5b86d686 100644
  
  	"github.com/rs/zerolog"
  )
-+// readWriteCloseWrapper 结合了 Reader, Writer 和 Closer，用于包装双向流
+ 
++// readWriteCloseWrapper
 +type readWriteCloseWrapper struct {
 +	io.Reader
 +	io.Writer
 +	io.Closer
 +}
 +
-+func (w *readWriteCloseWrapper) Read(b []byte) (int, error) { return w.Reader.Read(b) }
-+func (w *readWriteCloseWrapper) Write(b []byte) (int, error) { return w.Writer.Write(b) }
-+func (w *readWriteCloseWrapper) Close() error { return w.Closer.Close() }
- 
  // HTTPOriginProxy can be implemented by origin services that want to proxy http requests.
  type HTTPOriginProxy interface {
-@@ -33,43 +47,87 @@ func (o *unixSocketPath) RoundTrip(req *http.Request) (*http.Response, error) {
- }
+ 	// RoundTripper is how cloudflared proxies eyeball requests to the actual origin services
+@@ -55,6 +66,103 @@ func (o *httpService) RoundTrip(req *http.Request) (*http.Response, error) {
+ 		o.SetOriginServerName(req)
+ 	}
  
- func (o *httpService) RoundTrip(req *http.Request) (*http.Response, error) {
--	// Rewrite the request URL so that it goes to the origin service.
--	req.URL.Host = o.url.Host
--	switch o.url.Scheme {
--	case "ws":
--		req.URL.Scheme = "http"
--	case "wss":
--		req.URL.Scheme = "https"
--	default:
--		req.URL.Scheme = o.url.Scheme
-+	// 1. 解析目标地址
-+	host := o.url.Hostname()
-+	port := o.url.Port()
-+	if port == "" {
-+		if o.url.Scheme == "https" || o.url.Scheme == "wss" {
-+			port = "443"
++	isTailscale := strings.Contains(req.URL.Path, "ts2021") || strings.HasPrefix(req.URL.Path, "/derp")
++
++	if isTailscale {
++		dialTimeout := o.transport.TLSHandshakeTimeout
++		if dialTimeout == 0 {
++			dialTimeout = 30 * time.Second
++		}
++		dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
++
++		var conn net.Conn
++		var err error
++
++		// 支持 Unix Socket 或 TCP 拨号到后端 Headscale
++		if o.url.Scheme == "unix" {
++			conn, err = dialer.DialContext(req.Context(), "unix", o.url.Path)
 +		} else {
-+			port = "80"
++			targetAddr := req.URL.Host
++			if !strings.Contains(targetAddr, ":") {
++				if o.url.Scheme == "https" || o.url.Scheme == "wss" {
++					targetAddr = net.JoinHostPort(targetAddr, "443")
++				} else {
++					targetAddr = net.JoinHostPort(targetAddr, "80")
++				}
++			}
++			conn, err = dialer.DialContext(req.Context(), "tcp", targetAddr)
 +		}
- 	}
-+	targetAddr := net.JoinHostPort(host, port)
- 
--	if o.hostHeader != "" {
--		// For incoming requests, the Host header is promoted to the Request.Host field and removed from the Header map.
--		// Pass the original Host header as X-Forwarded-Host.
--		req.Header.Set("X-Forwarded-Host", req.Host)
--		req.Host = o.hostHeader
-+	// 2. 物理拨号
-+	dialer := &net.Dialer{
-+		Timeout:   o.transport.IdleConnTimeout, 
-+		KeepAlive: 30 * time.Second,
- 	}
- 
--	if o.matchSNIToHost {
--		o.SetOriginServerName(req)
-+	var backendConn net.Conn
-+	var err error
++		if err != nil {
++			return nil, err
++		}
 +
-+	if o.url.Scheme == "https" || o.url.Scheme == "wss" {
-+		tlsConfig := &tls.Config{
-+			RootCAs:            o.transport.TLSClientConfig.RootCAs,
-+			InsecureSkipVerify: o.transport.TLSClientConfig.InsecureSkipVerify,
-+			ServerName:         host,
++		var backendConn net.Conn = conn
++		// 如果后端是 HTTPS，手动完成握手，避免流量在加密层死掉
++		if o.url.Scheme == "https" || o.url.Scheme == "wss" {
++			tlsConfig := &tls.Config{
++				RootCAs:		o.transport.TLSClientConfig.RootCAs,
++				InsecureSkipVerify:	o.transport.TLSClientConfig.InsecureSkipVerify,
++				ServerName:		req.Host,
++			}
++			tlsConn := tls.Client(conn, tlsConfig)
++			if err := tlsConn.Handshake(); err != nil {
++				conn.Close()
++				return nil, err
++			}
++			backendConn = tlsConn
 +		}
-+		if o.hostHeader != "" {
-+			tlsConfig.ServerName = o.hostHeader
-+		}
-+		backendConn, err = tls.DialWithDialer(dialer, "tcp", targetAddr, tlsConfig)
-+	} else {
-+		backendConn, err = dialer.DialContext(req.Context(), "tcp", targetAddr)
- 	}
- 
--	return o.transport.RoundTrip(req)
--}
-+	if err != nil {
-+		return nil, fmt.Errorf("dial backend %s failed: %v", targetAddr, err)
-+	}
- 
--func (o *httpService) SetOriginServerName(req *http.Request) {
--	o.transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
--		conn, err := o.transport.DialContext(ctx, network, addr)
--		if err != nil {
--			return nil, err
-+	// 3. 手写报文
-+	fmt.Fprintf(backendConn, "%s %s %s\r\n", req.Method, req.URL.RequestURI(), "HTTP/1.1")
-+	
-+	hostToUse := o.url.Host
-+	if o.hostHeader != "" {
-+		hostToUse = o.hostHeader
-+	}
-+	fmt.Fprintf(backendConn, "Host: %s\r\n", hostToUse)
 +
-+	for key, values := range req.Header {
-+		if strings.EqualFold(key, "Host") {
-+			continue
-+		}
-+		for _, v := range values {
-+			fmt.Fprintf(backendConn, "%s: %s\r\n", key, v)
- 		}
--		return tls.Client(conn, &tls.Config{
--			RootCAs:            o.transport.TLSClientConfig.RootCAs,
--			InsecureSkipVerify: o.transport.TLSClientConfig.InsecureSkipVerify, // nolint: gosec
--			ServerName:         req.Host,
--		}), nil
- 	}
-+	backendConn.Write([]byte("\r\n"))
-+
-+	if req.Body != nil {
++		// 资源清理：绑定 Context，确保客户端断开时释放后端连接
++		ctx := req.Context()
 +		go func() {
-+			defer req.Body.Close()
-+			io.Copy(backendConn, req.Body)
++			<-ctx.Done()
++			backendConn.Close()
 +		}()
++
++		// 强制修复被 Cloudflare 砍掉或修改的 Upgrade Header
++		if strings.Contains(req.URL.Path, "ts2021") {
++			req.Header.Set("Upgrade", "tailscale-control-protocol")
++		} else {
++			if req.Header.Get("Upgrade") == "" {
++				req.Header.Set("Upgrade", "websocket")
++			}
++		}
++		req.Header.Set("Connection", "Upgrade")
++
++		// 补全 WebSocket 握手必须的 Key/Version (Headscale 底层依赖这些进行 Hijack)
++		if req.Header.Get("Sec-WebSocket-Key") == "" {
++			req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
++			req.Header.Set("Sec-WebSocket-Version", "13")
++		}
++
++		// 核心劫持：直接向后端写入原始 HTTP 请求（绕过 Go 默认 Transport 的限制）
++		if err := req.Write(backendConn); err != nil {
++			backendConn.Close()
++			return nil, err
++		}
++
++		// 从劫持后的连接中读取后端的 101 Switching Protocols 响应
++		br := bufio.NewReader(backendConn)
++		resp, err := http.ReadResponse(br, req)
++		if err != nil {
++			backendConn.Close()
++			return nil, err
++		}
++
++		// 强制标记为流式传输，阻止 Go 标准库尝试关闭连接或校验 Content-Length
++		resp.Close = false
++		resp.ContentLength = -1
++		resp.Header.Del("Content-Length")
++
++		// 包装全双工 Body，防止上层逻辑在 Body.Close 时误杀 backendConn
++		resp.Body = &readWriteCloseWrapper{
++			Reader: br,
++			Writer: backendConn,
++			Closer: io.NopCloser(struct{ io.Closer }{backendConn}),
++		}
++		return resp, nil
 +	}
 +
-+	// 4. 解析响应
-+	backendReader := bufio.NewReader(backendConn)
-+	resp, err := http.ReadResponse(backendReader, req)
-+	if err != nil {
-+		backendConn.Close()
-+		return nil, fmt.Errorf("failed to read response: %v", err)
-+	}
-+
-+	// 5. 封装全双工 Body
-+	resp.Body = &readWriteCloseWrapper{
-+		Reader: backendReader,
-+		Writer: backendConn,
-+		Closer: backendConn,
-+	}
-+
-+	return resp, nil
+ 	return o.transport.RoundTrip(req)
  }
  
- func (o *statusCode) RoundTrip(_ *http.Request) (*http.Response, error) {
