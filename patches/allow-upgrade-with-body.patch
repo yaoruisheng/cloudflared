@@ -1,1 +1,144 @@
-
+diff --git a/ingress/origin_proxy.go b/ingress/origin_proxy.go
+index 7371eac9..5b86d686 100644
+--- a/ingress/origin_proxy.go
++++ b/ingress/origin_proxy.go
+@@ -6,9 +6,23 @@ import (
+ 	"fmt"
+ 	"net"
+ 	"net/http"
++	"bufio"
++	"io"
++	"strings"
++	"time"
+ 
+ 	"github.com/rs/zerolog"
+ )
++// readWriteCloseWrapper 结合了 Reader, Writer 和 Closer，用于包装双向流
++type readWriteCloseWrapper struct {
++	io.Reader
++	io.Writer
++	io.Closer
++}
++
++func (w *readWriteCloseWrapper) Read(b []byte) (int, error) { return w.Reader.Read(b) }
++func (w *readWriteCloseWrapper) Write(b []byte) (int, error) { return w.Writer.Write(b) }
++func (w *readWriteCloseWrapper) Close() error { return w.Closer.Close() }
+ 
+ // HTTPOriginProxy can be implemented by origin services that want to proxy http requests.
+ type HTTPOriginProxy interface {
+@@ -33,43 +47,87 @@ func (o *unixSocketPath) RoundTrip(req *http.Request) (*http.Response, error) {
+ }
+ 
+ func (o *httpService) RoundTrip(req *http.Request) (*http.Response, error) {
+-	// Rewrite the request URL so that it goes to the origin service.
+-	req.URL.Host = o.url.Host
+-	switch o.url.Scheme {
+-	case "ws":
+-		req.URL.Scheme = "http"
+-	case "wss":
+-		req.URL.Scheme = "https"
+-	default:
+-		req.URL.Scheme = o.url.Scheme
++	// 1. 解析目标地址
++	host := o.url.Hostname()
++	port := o.url.Port()
++	if port == "" {
++		if o.url.Scheme == "https" || o.url.Scheme == "wss" {
++			port = "443"
++		} else {
++			port = "80"
++		}
+ 	}
++	targetAddr := net.JoinHostPort(host, port)
+ 
+-	if o.hostHeader != "" {
+-		// For incoming requests, the Host header is promoted to the Request.Host field and removed from the Header map.
+-		// Pass the original Host header as X-Forwarded-Host.
+-		req.Header.Set("X-Forwarded-Host", req.Host)
+-		req.Host = o.hostHeader
++	// 2. 物理拨号
++	dialer := &net.Dialer{
++		Timeout:   o.transport.IdleConnTimeout, 
++		KeepAlive: 30 * time.Second,
+ 	}
+ 
+-	if o.matchSNIToHost {
+-		o.SetOriginServerName(req)
++	var backendConn net.Conn
++	var err error
++
++	if o.url.Scheme == "https" || o.url.Scheme == "wss" {
++		tlsConfig := &tls.Config{
++			RootCAs:            o.transport.TLSClientConfig.RootCAs,
++			InsecureSkipVerify: o.transport.TLSClientConfig.InsecureSkipVerify,
++			ServerName:         host,
++		}
++		if o.hostHeader != "" {
++			tlsConfig.ServerName = o.hostHeader
++		}
++		backendConn, err = tls.DialWithDialer(dialer, "tcp", targetAddr, tlsConfig)
++	} else {
++		backendConn, err = dialer.DialContext(req.Context(), "tcp", targetAddr)
+ 	}
+ 
+-	return o.transport.RoundTrip(req)
+-}
++	if err != nil {
++		return nil, fmt.Errorf("dial backend %s failed: %v", targetAddr, err)
++	}
+ 
+-func (o *httpService) SetOriginServerName(req *http.Request) {
+-	o.transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+-		conn, err := o.transport.DialContext(ctx, network, addr)
+-		if err != nil {
+-			return nil, err
++	// 3. 手写报文
++	fmt.Fprintf(backendConn, "%s %s %s\r\n", req.Method, req.URL.RequestURI(), "HTTP/1.1")
++	
++	hostToUse := o.url.Host
++	if o.hostHeader != "" {
++		hostToUse = o.hostHeader
++	}
++	fmt.Fprintf(backendConn, "Host: %s\r\n", hostToUse)
++
++	for key, values := range req.Header {
++		if strings.EqualFold(key, "Host") {
++			continue
++		}
++		for _, v := range values {
++			fmt.Fprintf(backendConn, "%s: %s\r\n", key, v)
+ 		}
+-		return tls.Client(conn, &tls.Config{
+-			RootCAs:            o.transport.TLSClientConfig.RootCAs,
+-			InsecureSkipVerify: o.transport.TLSClientConfig.InsecureSkipVerify, // nolint: gosec
+-			ServerName:         req.Host,
+-		}), nil
+ 	}
++	backendConn.Write([]byte("\r\n"))
++
++	if req.Body != nil {
++		go func() {
++			defer req.Body.Close()
++			io.Copy(backendConn, req.Body)
++		}()
++	}
++
++	// 4. 解析响应
++	backendReader := bufio.NewReader(backendConn)
++	resp, err := http.ReadResponse(backendReader, req)
++	if err != nil {
++		backendConn.Close()
++		return nil, fmt.Errorf("failed to read response: %v", err)
++	}
++
++	// 5. 封装全双工 Body
++	resp.Body = &readWriteCloseWrapper{
++		Reader: backendReader,
++		Writer: backendConn,
++		Closer: backendConn,
++	}
++
++	return resp, nil
+ }
+ 
+ func (o *statusCode) RoundTrip(_ *http.Request) (*http.Response, error) {
