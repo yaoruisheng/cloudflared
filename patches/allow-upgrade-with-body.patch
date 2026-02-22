@@ -1,5 +1,5 @@
 diff --git a/ingress/origin_proxy.go b/ingress/origin_proxy.go
-index 7371eac9..9015ed1a 100644
+index 7371eac9..207b5928 100644
 --- a/ingress/origin_proxy.go
 +++ b/ingress/origin_proxy.go
 @@ -6,10 +6,21 @@ import (
@@ -24,19 +24,28 @@ index 7371eac9..9015ed1a 100644
  // HTTPOriginProxy can be implemented by origin services that want to proxy http requests.
  type HTTPOriginProxy interface {
  	// RoundTripper is how cloudflared proxies eyeball requests to the actual origin services
-@@ -55,6 +66,94 @@ func (o *httpService) RoundTrip(req *http.Request) (*http.Response, error) {
+@@ -55,6 +66,101 @@ func (o *httpService) RoundTrip(req *http.Request) (*http.Response, error) {
  		o.SetOriginServerName(req)
  	}
  
 +	var conn net.Conn
 +	var err error
-+	isTailscale := strings.Contains(req.URL.Path, "ts2021") || strings.HasPrefix(req.URL.Path, "/derp")
++
++	// 1. 精准且宽泛的拦截判定
++	// 涵盖 ts2021 入口、DERP 路径、机器注册路径，以及任何有升级意图的请求
++	isTailscale := strings.Contains(req.URL.Path, "ts2021") ||
++		strings.HasPrefix(req.URL.Path, "/derp") ||
++		strings.Contains(req.URL.Path, "/machine") ||
++		req.Header.Get("Upgrade") != ""
++
 +	if isTailscale {
 +		dialTimeout := o.transport.TLSHandshakeTimeout
 +		if dialTimeout == 0 {
 +			dialTimeout = 30 * time.Second
 +		}
 +		dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
++
++		// 2. 拨号与 TLS 建立
 +		if o.url.Scheme == "unix" {
 +			conn, err = dialer.DialContext(req.Context(), "unix", o.url.Path)
 +		} else {
@@ -69,21 +78,21 @@ index 7371eac9..9015ed1a 100644
 +			backendConn = tlsConn
 +		}
 +
-+		// 补偿请求 Header
-+		if strings.Contains(req.URL.Path, "ts2021") {
++		// 3. 请求侧补偿：在发给 Headscale 前补齐 Header
++		if strings.Contains(req.URL.Path, "ts2021") || strings.Contains(req.URL.Path, "machine") {
 +			req.Header.Set("Upgrade", "tailscale-control-protocol")
-+		} else {
++		} else if req.Header.Get("Upgrade") == "" {
 +			req.Header.Set("Upgrade", "websocket")
 +		}
 +		req.Header.Set("Connection", "Upgrade")
 +
-+		// 物理写入
++		// 物理写入请求
 +		if err := req.Write(backendConn); err != nil {
 +			backendConn.Close()
 +			return nil, err
 +		}
 +
-+		// 读取响应
++		// 4. 读取响应并进行“防阉割”补偿
 +		br := bufio.NewReader(backendConn)
 +		resp, err := http.ReadResponse(br, req)
 +		if err != nil {
@@ -91,20 +100,17 @@ index 7371eac9..9015ed1a 100644
 +			return nil, err
 +		}
 +
-+		// 补偿响应 Header
++		// 核心修正：无论后端给没给，只要是 101，我们就强行声明身份
 +		if resp.StatusCode == http.StatusSwitchingProtocols {
-+			if resp.Header.Get("Upgrade") == "" {
-+				if strings.Contains(req.URL.Path, "ts2021") {
-+					resp.Header.Set("Upgrade", "tailscale-control-protocol")
-+				} else {
-+					resp.Header.Set("Upgrade", "websocket")
-+				}
++			if strings.Contains(req.URL.Path, "ts2021") || strings.Contains(req.URL.Path, "machine") {
++				resp.Header.Set("Upgrade", "tailscale-control-protocol")
++			} else if resp.Header.Get("Upgrade") == "" {
++				resp.Header.Set("Upgrade", "websocket")
 +			}
-+			if resp.Header.Get("Connection") == "" {
-+				resp.Header.Set("Connection", "Upgrade")
-+			}
++			resp.Header.Set("Connection", "Upgrade")
 +		}
 +
++		// 5. 开启透传模式：关闭整流，接管 Body
 +		resp.Close = false
 +		resp.ContentLength = -1
 +		resp.Header.Del("Content-Length")
@@ -116,6 +122,7 @@ index 7371eac9..9015ed1a 100644
 +		return resp, nil
 +	}
 +
++	// 非隧道流量走原有的 Transport 逻辑
  	return o.transport.RoundTrip(req)
  }
  
