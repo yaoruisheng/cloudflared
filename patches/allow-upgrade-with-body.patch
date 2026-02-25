@@ -1,43 +1,49 @@
-diff --git a/ingress/origin_proxy.go b/ingress/origin_proxy.go
-index 7371eac9..56392957 100644
---- a/ingress/origin_proxy.go
-+++ b/ingress/origin_proxy.go
-@@ -6,6 +6,11 @@ import (
- 	"fmt"
- 	"net"
- 	"net/http"
+diff --git a/connection/http2.go b/connection/http2.go
+index c7e14c67..d7d5863e 100644
+--- a/connection/http2.go
++++ b/connection/http2.go
+@@ -11,6 +11,9 @@ import (
+ 	"runtime/debug"
+ 	"strings"
+ 	"sync"
++	"bytes"
 +	"os"
 +	"time"
-+	"bytes"
-+	"io"
-+	"strings"
  
+ 	"github.com/pkg/errors"
  	"github.com/rs/zerolog"
- )
-@@ -33,6 +38,26 @@ func (o *unixSocketPath) RoundTrip(req *http.Request) (*http.Response, error) {
- }
+@@ -100,6 +103,34 @@ func (c *HTTP2Connection) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	c.activeRequestsWG.Add(1)
+ 	defer c.activeRequestsWG.Done()
  
- func (o *httpService) RoundTrip(req *http.Request) (*http.Response, error) {
-+	// --- FORCE DUMP REQUEST ---
-+	dumpFile := fmt.Sprintf("/tmp/cloudflared_dump_req_%d.txt", time.Now().UnixNano())
-+	f, _ := os.Create(dumpFile) // 忽略错误，尽量写
++	// --- 1. [第一现场] 原始请求 DUMP 开始 ---
++	// 在这里能抓到最原始的 Header（包括私有头）和 Body
++	dumpFile := fmt.Sprintf("/tmp/cloudflared_RAW_ENTRY_%d.txt", time.Now().UnixNano())
++	f, _ := os.Create(dumpFile)
 +	if f != nil {
 +		defer f.Close()
-+		fmt.Fprintf(f, "%s %s %s\n", req.Method, req.URL.String(), req.Proto)
-+		for k, v := range req.Header {
++		fmt.Fprintf(f, "--- RAW REQUEST FROM EDGE ---\n")
++		fmt.Fprintf(f, "METHOD: %s | URL: %s | PROTO: %s\n", r.Method, r.URL.String(), r.Proto)
++		
++		// 打印所有 Header
++		for k, v := range r.Header {
 +			fmt.Fprintf(f, "%s: %s\n", k, strings.Join(v, ", "))
 +		}
 +		fmt.Fprintln(f, "")
 +
-+		if req.Body != nil {
-+			const maxDumpSize = 4096
-+			bodyBytes, _ := io.ReadAll(io.LimitReader(req.Body, maxDumpSize))
-+			fmt.Fprintf(f, "%s\n", string(bodyBytes))
-+			// Restore body so RoundTrip still works
-+			req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyBytes), req.Body))
++		if r.Body != nil {
++			// 读取 Body
++			bodyBytes, _ := io.ReadAll(r.Body)
++			if len(bodyBytes) > 0 {
++				fmt.Fprintf(f, "--- RAW BODY DATA ---\n%s\n", string(bodyBytes))
++			} else {
++				fmt.Fprintln(f, "--- BODY IS EMPTY ---")
++			}
++			// 【关键】还原 Body 给后续流程使用
++			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 +		}
 +	}
-+	// --- END FORCE DUMP ---
- 	// Rewrite the request URL so that it goes to the origin service.
- 	req.URL.Host = o.url.Host
- 	switch o.url.Scheme {
++	// --- DUMP 结束 ---
+ 	connType := determineHTTP2Type(r)
+ 	handleMissingRequestParts(connType, r)
+ 
