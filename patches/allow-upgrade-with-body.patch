@@ -1,19 +1,18 @@
 diff --git a/proxy/proxy.go b/proxy/proxy.go
-index e5d7fc6d..5dfa0d1f 100644
+index e5d7fc6d..aeface1f 100644
 --- a/proxy/proxy.go
 +++ b/proxy/proxy.go
-@@ -8,6 +8,10 @@ import (
+@@ -8,6 +8,9 @@ import (
  	"net/netip"
  	"strconv"
  	"time"
 +	"strings"
 +	"os"
-+	"io"
 +	"bytes"
  
  	"github.com/pkg/errors"
  	"github.com/rs/zerolog"
-@@ -86,6 +90,40 @@ func (p *Proxy) ProxyHTTP(
+@@ -86,6 +89,40 @@ func (p *Proxy) ProxyHTTP(
  	defer decrementConcurrentRequests()
  
  	req := tr.Request
