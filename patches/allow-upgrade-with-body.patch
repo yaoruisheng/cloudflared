@@ -1,5 +1,5 @@
 diff --git a/connection/http2.go b/connection/http2.go
-index c7e14c67..c5f84b01 100644
+index c7e14c67..53a4fc95 100644
 --- a/connection/http2.go
 +++ b/connection/http2.go
 @@ -11,6 +11,8 @@ import (
@@ -11,32 +11,29 @@ index c7e14c67..c5f84b01 100644
  
  	"github.com/pkg/errors"
  	"github.com/rs/zerolog"
-@@ -97,6 +99,28 @@ func (c *HTTP2Connection) Serve(ctx context.Context) error {
+@@ -97,6 +99,25 @@ func (c *HTTP2Connection) Serve(ctx context.Context) error {
  }
  
  func (c *HTTP2Connection) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-+	// --- DUMP REQUEST ---
-+	go func(req *http.Request) {
-+			dumpFile := fmt.Sprintf("/tmp/cloudflared_dump_conn%d.txt", c.connIndex)
-+			f, err := os.Create(dumpFile)
-+			if err != nil {
-+					c.log.Error().Err(err).Msg("failed to create dump file")
-+					return
-+			}
-+			defer f.Close()
-+			fmt.Fprintf(f, "%s %s %s\n", req.Method, req.URL.String(), req.Proto)
-+			for k, v := range req.Header {
-+					fmt.Fprintf(f, "%s: %s\n", k, strings.Join(v, ", "))
-+			}
-+			fmt.Fprintln(f, "")
-+			if req.Body != nil {
-+        const maxDumpSize = 4096
-+        bodyBytes, _ := io.ReadAll(io.LimitReader(req.Body, maxDumpSize))
-+        fmt.Fprintf(f, "%s\n", string(bodyBytes))
-+        req.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyBytes), req.Body))
-+			}
-+	}(r)
-+	// --- END DUMP ---
++  dumpFile := fmt.Sprintf("/tmp/cloudflared_dump_conn%d.txt", c.connIndex)
++  f, err := os.Create(dumpFile)
++  if err != nil {
++      c.log.Error().Err(err).Msg("failed to create dump file")
++      return
++  }
++  defer f.Close()
++
++  fmt.Fprintf(f, "%s %s %s\n", r.Method, r.URL.String(), r.Proto)
++  for k, v := range r.Header {
++      fmt.Fprintf(f, "%s: %s\n", k, strings.Join(v, ", "))
++  }
++  fmt.Fprintln(f, "")
++  if r.Body != nil {
++      const maxDumpSize = 4096
++      bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, maxDumpSize))
++      fmt.Fprintf(f, "%s\n", string(bodyBytes))
++      r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyBytes), r.Body))
++  }
  	c.activeRequestsWG.Add(1)
  	defer c.activeRequestsWG.Done()
  
