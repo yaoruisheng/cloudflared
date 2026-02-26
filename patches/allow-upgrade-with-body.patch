@@ -1,55 +1,35 @@
-diff --git a/proxy/proxy.go b/proxy/proxy.go
-index e5d7fc6d..aeface1f 100644
---- a/proxy/proxy.go
-+++ b/proxy/proxy.go
-@@ -8,6 +8,9 @@ import (
- 	"net/netip"
- 	"strconv"
- 	"time"
-+	"strings"
-+	"os"
+diff --git a/connection/http2.go b/connection/http2.go
+index c7e14c67..34f282fb 100644
+--- a/connection/http2.go
++++ b/connection/http2.go
+@@ -11,6 +11,7 @@ import (
+ 	"runtime/debug"
+ 	"strings"
+ 	"sync"
 +	"bytes"
  
  	"github.com/pkg/errors"
  	"github.com/rs/zerolog"
-@@ -86,6 +89,40 @@ func (p *Proxy) ProxyHTTP(
- 	defer decrementConcurrentRequests()
+@@ -100,6 +101,22 @@ func (c *HTTP2Connection) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	c.activeRequestsWG.Add(1)
+ 	defer c.activeRequestsWG.Done()
  
- 	req := tr.Request
-+	logFile := "/tmp/cloudflared_final_proxy.log"
-+	f, _ := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-+	
-+	if f != nil {
-+		defer f.Close()
-+		now := time.Now().Format("15:04:05.000")
-+		fmt.Fprintf(f, "[%s] >>> NEW BUSINESS REQUEST <<<\n", now)
-+		fmt.Fprintf(f, "PATH: %s | METHOD: %s\n", req.URL.Path, req.Method)
-+		fmt.Fprintf(f, "INPUT_IS_WEBSOCKET_ARG: %v\n", isWebsocket) // 看看上层 RPC 到底传了啥
-+
-+		// 2. 打印所有 Header，查出 Cf-Cloudflared-Proxy-Connection-Upgrade 的真身
-+		fmt.Fprintln(f, "HEADERS:")
-+		for k, v := range req.Header {
-+			fmt.Fprintf(f, "  %s: %s\n", k, strings.Join(v, ", "))
-+		}
-+
-+		// 3. 检查 Body (Tailscale 握手可能带数据)
-+		if req.Body != nil {
-+			bodyBytes, _ := io.ReadAll(req.Body)
-+			if len(bodyBytes) > 0 {
-+				fmt.Fprintf(f, "BODY_CONTENT: %s\n", string(bodyBytes))
-+			}
-+			// 【必做】读完必须还回去，否则后端 8080 会读到空
-+			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-+		}
-+
-+		// 4. 【核心纠偏】如果发现有 Upgrade 迹象，但 isWebsocket 是 false，强行扭转
-+		if !isWebsocket && (req.Header.Get("Upgrade") != "" || req.Header.Get("Cf-Cloudflared-Proxy-Connection-Upgrade") != "") {
-+			fmt.Fprintf(f, "!!! CORRECTION: Forcing isWebsocket = true due to Upgrade headers\n")
-+			isWebsocket = true
-+		}
-+		fmt.Fprintln(f, "-----------------------------------\n")
++	fmt.Println("========== DUMP REQUEST ==========")
++	fmt.Printf("Method: %s | URL: %s | RemoteAddr: %s\n", r.Method, r.URL.String(), r.RemoteAddr)
++	fmt.Println("--- Headers ---")
++	for k, v := range r.Header {
++		fmt.Printf("%s: %v\n", k, v)
 +	}
-+	// --- 【DUMP & 纠偏逻辑结束】 ---
- 	p.appendTagHeaders(req)
++	if r.Body != nil {
++		bodyChunk, err := io.ReadAll(io.LimitReader(r.Body, 512))
++		if err == nil && len(bodyChunk) > 0 {
++			fmt.Printf("--- Body (First %d bytes) ---\n", len(bodyChunk))
++			fmt.Println(string(bodyChunk))
++			r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyChunk), r.Body))
++		}
++	}
++	fmt.Println("==================================")
++
+ 	connType := determineHTTP2Type(r)
+ 	handleMissingRequestParts(connType, r)
  
- 	_, ruleSpan := tr.Tracer().Start(req.Context(), "ingress_match",
