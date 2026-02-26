@@ -1,26 +1,20 @@
-diff --git a/connection/http2.go b/connection/http2.go
-index c7e14c67..1fc3885e 100644
---- a/connection/http2.go
-+++ b/connection/http2.go
-@@ -100,6 +100,21 @@ func (c *HTTP2Connection) ServeHTTP(w http.ResponseWriter, r *http.Request) {
- 	c.activeRequestsWG.Add(1)
- 	defer c.activeRequestsWG.Done()
- 
-+	fmt.Println("========== DUMP REQUEST ==========")
-+	fmt.Printf("Method: %s | URL: %s | RemoteAddr: %s\n", r.Method, r.URL.String(), r.RemoteAddr)
-+	fmt.Println("--- Headers ---")
-+	for k, v := range r.Header {
-+		fmt.Printf("%s: %v\n", k, v)
-+	}
-+	if r.Body != nil {
-+			fmt.Printf("--- Body Info ---\n")
-+			fmt.Printf("ContentLength: %d (Note: -1 means chunked/unknown)\n", r.ContentLength)
-+			fmt.Printf("Body Object: %p (Non-nil)\n", r.Body)
-+	} else {
-+			fmt.Println("--- Body: nil ---")
-+	}
-+	fmt.Println("==================================")
-+
- 	connType := determineHTTP2Type(r)
- 	handleMissingRequestParts(connType, r)
- 
+diff --git a/proxy/proxy.go b/proxy/proxy.go
+index e5d7fc6d..feca6629 100644
+--- a/proxy/proxy.go
++++ b/proxy/proxy.go
+@@ -197,8 +197,13 @@ func (p *Proxy) proxyHTTPRequest(
+ 		roundTripReq.Header.Set("Connection", "Upgrade")
+ 		roundTripReq.Header.Set("Upgrade", "websocket")
+ 		roundTripReq.Header.Set("Sec-Websocket-Version", "13")
+-		roundTripReq.ContentLength = 0
+-		roundTripReq.Body = nil
++		if tr.Request.Body != nil && tr.Request.ContentLength != 0 {
++			roundTripReq.ContentLength = tr.Request.ContentLength
++			roundTripReq.Body = tr.Request.Body
++		} else {
++			roundTripReq.ContentLength = 0
++			roundTripReq.Body = nil
++		}
+ 	} else {
+ 		// Support for WSGI Servers by switching transfer encoding from chunked to gzip/deflate
+ 		if disableChunkedEncoding {
