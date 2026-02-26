@@ -1,16 +1,8 @@
 diff --git a/connection/http2.go b/connection/http2.go
-index c7e14c67..34f282fb 100644
+index c7e14c67..1fc3885e 100644
 --- a/connection/http2.go
 +++ b/connection/http2.go
-@@ -11,6 +11,7 @@ import (
- 	"runtime/debug"
- 	"strings"
- 	"sync"
-+	"bytes"
- 
- 	"github.com/pkg/errors"
- 	"github.com/rs/zerolog"
-@@ -100,6 +101,22 @@ func (c *HTTP2Connection) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+@@ -100,6 +100,21 @@ func (c *HTTP2Connection) ServeHTTP(w http.ResponseWriter, r *http.Request) {
  	c.activeRequestsWG.Add(1)
  	defer c.activeRequestsWG.Done()
  
@@ -21,12 +13,11 @@ index c7e14c67..34f282fb 100644
 +		fmt.Printf("%s: %v\n", k, v)
 +	}
 +	if r.Body != nil {
-+		bodyChunk, err := io.ReadAll(io.LimitReader(r.Body, 512))
-+		if err == nil && len(bodyChunk) > 0 {
-+			fmt.Printf("--- Body (First %d bytes) ---\n", len(bodyChunk))
-+			fmt.Println(string(bodyChunk))
-+			r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(bodyChunk), r.Body))
-+		}
++			fmt.Printf("--- Body Info ---\n")
++			fmt.Printf("ContentLength: %d (Note: -1 means chunked/unknown)\n", r.ContentLength)
++			fmt.Printf("Body Object: %p (Non-nil)\n", r.Body)
++	} else {
++			fmt.Println("--- Body: nil ---")
 +	}
 +	fmt.Println("==================================")
 +
