@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # 1️⃣ 检出官方源码到主目录 (.)
+      # 1. 检出官方源码到主目录 (.)
       - name: Checkout cloudflared
         uses: actions/checkout@v4
         with:
@@ -25,13 +25,13 @@ jobs:
           ref: ${{ github.event.inputs.version }}
           fetch-depth: 0
 
-      # 2️⃣ 检出你自己的仓库到临时目录 (tmp_patches)
+      # 2. 检出你自己的仓库到临时目录 (tmp_patches)
       - name: Checkout custom patches
         uses: actions/checkout@v4
         with:
           path: tmp_patches
 
-      # 3️⃣ 应用补丁 (使用 -p1 模式)
+      # 3. 应用补丁 (使用 -p1 模式)
       - name: Apply Headscale Patches
         run: |
           # 确保在 cloudflared 源码根目录下运行
@@ -39,20 +39,20 @@ jobs:
           # 清理编码
           #find . -type f -name "*.go" -exec sed -i 's/\xc2\xa0/ /g' {} +
           # 打补丁
-          patch -p1 --verbose --ignore-whitespace < tmp_patches/patches/allow-upgrade-with-body.patch            
+          # patch -p1 --verbose --ignore-whitespace < tmp_patches/patches/allow-upgrade-with-body.patch            
           # 清理临时目录
-          rm -rf tmp_patches
-          echo "Patches applied successfully using patch -p1."
+          # rm -rf tmp_patches
+          # echo "Patches applied successfully using patch -p1."
           #exit 1
 
-      # 4️⃣ 安装环境依赖 (对齐 Makefile 需求)
+      # 4. 安装环境依赖 (对齐 Makefile 需求)
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y make capnproto libcapnp-dev ruby ruby-dev rubygems build-essential rpm
           sudo gem install --no-document fpm
 
-      # 5️⃣ 安装你指定的自定义 Legacy Go (解决 syscall 问题)
+      # 5. 安装你指定的自定义 Legacy Go (解决 syscall 问题)
       - name: Install Your Custom Legacy Go
         run: |
           curl -L -o go.tar.gz https://github.com/yaoruisheng/go/releases/download/go-legacy-amd64-14/go-legacy-amd64.tar.gz
@@ -61,12 +61,12 @@ jobs:
           echo "GOROOT=$HOME/custom_go" >> $GITHUB_ENV
           echo "PATH=$HOME/custom_go/bin:$PATH" >> $GITHUB_ENV
 
-      # 6️⃣ 安装 Makefile 必需插件
+      # 6. 安装 Makefile 必需插件
       - name: Install Go Tools
         run: |
           go install capnproto.org/go/capnp/v3/capnpc-go@latest
 
-      # 7️⃣ 编译与命名优化 (路径与你原始版本完全一致)
+      # 7. 编译与命名优化 (路径与你原始版本完全一致)
       - name: Build and Prepare Official Assets
         id: prep
         run: |
@@ -89,7 +89,7 @@ jobs:
           echo "BINARY=$BINARY_NAME" >> $GITHUB_OUTPUT
           echo "DEB=$DEB_NAME" >> $GITHUB_OUTPUT
 
-      # 8️⃣ 发布到 GitHub Release
+      # 8. 发布到 GitHub Release
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -102,7 +102,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 9️⃣ 上传 Artifact 备份
+      # 9. 上传 Artifact 备份
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
